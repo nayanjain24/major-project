@@ -1,0 +1,1 @@
+"""VERS shared utility modules."""

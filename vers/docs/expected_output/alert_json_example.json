@@ -1,0 +1,12 @@
+{
+  "AlertID": "GEN_1774628671",
+  "Timestamp": "2026-03-27T16:24:31.538634+00:00",
+  "Location": "Simulated Booth A12",
+  "Severity": "High",
+  "MainGesture": "DANGER",
+  "GestureConfidence": 0.93,
+  "DistressScore": 0.707,
+  "DistressFlag": true,
+  "Message": "Immediate danger reported",
+  "SecondaryEmotion": "High Distress"
+}

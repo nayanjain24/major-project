@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>VERS Localhost Dashboard</title>
+    <style>
+      :root {
+        --bg: #f4f7fb;
+        --panel: #ffffff;
+        --line: #d7e1ec;
+        --text: #132232;
+        --muted: #627283;
+        --red: #d73a31;
+        --green: #2f9b57;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", system-ui, sans-serif;
+        background: linear-gradient(180deg, #fbfdff 0%, var(--bg) 100%);
+        color: var(--text);
+      }
+      .page {
+        max-width: 1400px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: end;
+        gap: 24px;
+        margin-bottom: 20px;
+      }
+      .title {
+        font-size: 2rem;
+        font-weight: 800;
+        margin: 0;
+      }
+      .subtitle {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+      .status-bar {
+        padding: 14px 18px;
+        border-radius: 16px;
+        color: #fff;
+        font-weight: 700;
+        min-width: 280px;
+        text-align: center;
+      }
+      .layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.85fr);
+        gap: 22px;
+      }
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 20px;
+        box-shadow: 0 12px 28px rgba(16, 36, 56, 0.08);
+        overflow: hidden;
+      }
+      .video-wrap {
+        padding: 16px;
+      }
+      .video-feed {
+        width: 100%;
+        border-radius: 16px;
+        border: 1px solid var(--line);
+        background: #0f1820;
+        display: block;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+        padding: 16px;
+      }
+      .metric {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 14px;
+        background: #fbfdff;
+      }
+      .metric .label {
+        color: var(--muted);
+        font-size: 0.85rem;
+        margin-bottom: 8px;
+      }
+      .metric .value {
+        font-size: 1.2rem;
+        font-weight: 800;
+      }
+      .side {
+        padding: 18px;
+      }
+      .side h2 {
+        margin: 0 0 12px;
+        font-size: 1.1rem;
+      }
+      .incident {
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 16px;
+        background: #fbfdff;
+      }
+      .incident p {
+        margin: 10px 0 0;
+        color: #344556;
+        line-height: 1.5;
+      }
+      .alerts {
+        margin-top: 18px;
+      }
+      .alert-item {
+        border-left: 6px solid var(--red);
+        background: #fff6f5;
+        border-radius: 14px;
+        padding: 12px 14px;
+        margin-bottom: 12px;
+      }
+      .alert-item.safe {
+        border-left-color: var(--green);
+        background: #f4fbf6;
+      }
+      .alert-head {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        font-weight: 700;
+      }
+      .small {
+        color: var(--muted);
+        font-size: 0.85rem;
+      }
+      @media (max-width: 1000px) {
+        .layout {
+          grid-template-columns: 1fr;
+        }
+        .header {
+          flex-direction: column;
+          align-items: stretch;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="header">
+        <div>
+          <h1 class="title">VERS Localhost Dashboard</h1>
+          <p class="subtitle">Live webcam stream, gesture recognition, distress scoring, and alert monitoring.</p>
+        </div>
+        <div id="statusBar" class="status-bar" style="background:#2f9b57;">Starting camera...</div>
+      </div>
+
+      <div class="layout">
+        <div class="panel">
+          <div class="video-wrap">
+            <img class="video-feed" src="/video_feed" alt="VERS webcam feed">
+          </div>
+          <div class="grid">
+            <div class="metric">
+              <div class="label">Gesture</div>
+              <div id="gesture" class="value">Loading...</div>
+            </div>
+            <div class="metric">
+              <div class="label">Confidence</div>
+              <div id="confidence" class="value">0.00</div>
+            </div>
+            <div class="metric">
+              <div class="label">Distress Score</div>
+              <div id="distress" class="value">0.000</div>
+            </div>
+            <div class="metric">
+              <div class="label">FPS</div>
+              <div id="fps" class="value">0.0</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel side">
+          <h2>System State</h2>
+          <div class="incident">
+            <div class="small">Model Type</div>
+            <div id="modelType" class="value">Loading...</div>
+            <div class="small" style="margin-top:14px;">Loaded Labels</div>
+            <div id="labels" style="margin-top:6px;font-weight:700;">-</div>
+            <div class="small" style="margin-top:14px;">Last Alert</div>
+            <p id="lastAlert">No alert yet.</p>
+            <div class="small" style="margin-top:14px;">Runtime Error</div>
+            <p id="errorText">None</p>
+          </div>
+
+          <div class="alerts">
+            <h2>Recent Alerts</h2>
+            <div id="alertsList" class="small">Waiting for activity...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      function esc(value) {
+        return String(value ?? "").replace(/[&<>"']/g, (ch) => ({
+          "&": "&amp;",
+          "<": "&lt;",
+          ">": "&gt;",
+          '"': "&quot;",
+          "'": "&#39;"
+        }[ch]));
+      }
+
+      async function refreshStatus() {
+        try {
+          const response = await fetch("/api/status");
+          const data = await response.json();
+
+          const emergency = data.gesture && data.gesture !== "No gesture" && data.confidence >= 0.70;
+          const statusBar = document.getElementById("statusBar");
+          statusBar.style.background = emergency ? "#d73a31" : "#2f9b57";
+          statusBar.textContent = emergency
+            ? `Emergency detected: ${data.gesture}`
+            : "Monitoring / safe state";
+
+          document.getElementById("gesture").textContent = data.gesture ?? "No gesture";
+          document.getElementById("confidence").textContent = Number(data.confidence ?? 0).toFixed(2);
+          document.getElementById("distress").textContent = Number(data.distress_score ?? 0).toFixed(3);
+          document.getElementById("fps").textContent = Number(data.fps ?? 0).toFixed(1);
+          document.getElementById("modelType").textContent = data.model_type ?? "unknown";
+          document.getElementById("labels").textContent = (data.labels || []).join(", ") || "-";
+          document.getElementById("errorText").textContent = data.error || "None";
+
+          const lastAlert = document.getElementById("lastAlert");
+          if (data.last_alert) {
+            lastAlert.textContent = `${data.last_alert.message} (${data.last_alert.severity})`;
+          } else {
+            lastAlert.textContent = "No alert yet.";
+          }
+
+          const alertsList = document.getElementById("alertsList");
+          if (!data.alerts || data.alerts.length === 0) {
+            alertsList.innerHTML = "Waiting for activity...";
+          } else {
+            alertsList.innerHTML = data.alerts.map((alert) => {
+              const safe = (alert.gesture || "").toUpperCase() === "SAFE";
+              return `
+                <div class="alert-item ${safe ? "safe" : ""}">
+                  <div class="alert-head">
+                    <span>${esc(alert.gesture)} - ${esc(alert.severity)}</span>
+                    <span class="small">${esc(alert.timestamp)}</span>
+                  </div>
+                  <div style="margin-top:6px;">${esc(alert.message)}</div>
+                  <div class="small" style="margin-top:6px;">
+                    confidence=${esc(alert.gesture_conf)} | distress=${esc(alert.distress_score)}
+                  </div>
+                </div>
+              `;
+            }).join("");
+          }
+        } catch (error) {
+          document.getElementById("statusBar").style.background = "#d73a31";
+          document.getElementById("statusBar").textContent = "Failed to load dashboard status";
+          document.getElementById("errorText").textContent = String(error);
+        }
+      }
+
+      refreshStatus();
+      setInterval(refreshStatus, 500);
+    </script>
+  </body>
+  </html>
