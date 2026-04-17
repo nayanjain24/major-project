@@ -15,12 +15,22 @@ Conventional emergency response channels depend heavily on spoken communication.
 6. Improve accessibility for deaf, hard-of-hearing, and speech-impaired individuals.
 7. Deliver an inclusive emergency response workflow suitable for demos and future field adaptation.
 
+## Gesture Mapping
+| Gesture | Hand Sign | Severity | Description |
+|---------|-----------|----------|-------------|
+| **SOS** | ✋ Open Hand (5 fingers) | High | General SOS request |
+| **EMERGENCY** | ✌️ V-shape (2 fingers) | Critical | Urgent emergency signal |
+| **ACCIDENT** | ✊ Fist (all closed) | High | Accident reported |
+| **MEDICAL** | 🖐️ 4 Fingers (thumb folded) | High | Medical assistance needed |
+| **SAFE** | 👍 Thumbs Up | Low | Status: safe |
+
 ## Architecture Overview
 See `docs/workflow.png` for the Phase-1 system pipeline:
 - **Input**: Camera feed
 - **Preprocessing**: OpenCV frame capture and normalization
 - **Feature Extraction**: MediaPipe Hands + Face Mesh
 - **AI Module**: Scikit-learn gesture classifier + distress heuristic
+- **Severity Fusion**: Weighted combination of gesture confidence (60%) and distress score (40%)
 - **Alert Generation**: Canonical JSON payload
 - **Communication**: Streamlit dashboard, JSON logs, and mock Flask endpoint
 
@@ -32,6 +42,7 @@ See `docs/workflow.png` for the Phase-1 system pipeline:
 | Landmark Extraction | `src/utils/data_utils.py` |
 | Gesture Training | `src/train_classifier.py` |
 | Distress Analysis | `calc_distress()` in `src/realtime_vers.py` |
+| Severity Fusion | `calculate_fused_severity()` in `src/utils/alert_utils.py` |
 | Message Generation | `src/utils/alert_utils.py` |
 | Alert Transmission | `logs/alerts.log`, `src/alert_server.py`, `src/vers_dashboard.py` |
 
@@ -41,6 +52,7 @@ See `docs/workflow.png` for the Phase-1 system pipeline:
 - Accessibility-first emergency communication workflow
 - Structured JSON alerts suitable for downstream integration
 - Demo-ready orchestration for quick MacBook presentations
+- Severity fusion combines gesture confidence with facial distress
 
 **Known limitations**
 - Lighting quality affects hand and face tracking accuracy
@@ -51,6 +63,24 @@ See `docs/workflow.png` for the Phase-1 system pipeline:
 - Use a well-lit room with even front lighting
 - Keep the active hand centered and fully visible
 - Close other apps that may be using the webcam
+
+## Quick Start
+
+```bash
+# 1. Set up environment
+cd "/Users/nayanjain/Desktop/major project/vers"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 2. Generate data and train (first time only)
+python seed_demo_data.py
+python src/train_classifier.py
+
+# 3. Launch the demo
+python src/orchestrate.py
+```
 
 ## MacBook Demo Setup
 
@@ -70,9 +100,28 @@ pip install -r requirements.txt
 
 ### Fast Demo Run
 This is the default presentation mode. It reuses the checked-in dataset and trained model if they already exist.
+It starts the mock alert server and runs Streamlit as the primary UI (single-camera-owner flow).
 
 ```bash
 python src/orchestrate.py
+```
+
+### Demo Modes
+```bash
+# Recommended: Streamlit dashboard only
+python src/orchestrate.py --mode dashboard
+
+# OpenCV real-time window only
+python src/orchestrate.py --mode realtime
+
+# Both at once (may contend for camera)
+python src/orchestrate.py --mode hybrid
+```
+
+### Calibration (Recommended for Best Accuracy)
+Record your own hand signs for each of the 5 gestures:
+```bash
+python src/orchestrate.py --calibrate
 ```
 
 ### Full From-Scratch Run
@@ -84,22 +133,45 @@ python src/orchestrate.py --force-capture --force-train
 
 ### Individual Commands
 ```bash
-python src/record_gestures.py --label HELP --samples 200
-python src/train_classifier.py
-python src/realtime_vers.py
-python src/alert_server.py
-python -m streamlit run src/vers_dashboard.py
-python web_vers.py
+python seed_demo_data.py                    # Generate synthetic training data
+python src/record_gestures.py --label SOS --samples 200  # Record real gestures
+python src/train_classifier.py              # Train the classifier
+python src/realtime_vers.py                 # OpenCV real-time demo
+python src/alert_server.py                  # Mock alert server
+python -m streamlit run src/vers_dashboard.py  # Streamlit dashboard
+python web_vers.py                          # Legacy Flask dashboard
 ```
 
 ## Demo Flow
 1. Launch `python src/orchestrate.py`.
 2. Open the Streamlit dashboard at `http://localhost:8501`.
-3. Perform `HELP`, `MEDICAL`, and `DANGER` gestures in front of the webcam.
+3. Click **Start Stream** in Streamlit and perform gestures: **SOS**, **EMERGENCY**, **ACCIDENT**, **MEDICAL**, **SAFE**.
 4. Show live overlay, recent alerts, and `logs/alerts.log`.
-5. Press `q` in the OpenCV window to end the live realtime loop.
+5. If backend webcam access is blocked, use the **Browser Camera Fallback** panel in Streamlit.
 
 The legacy Flask dashboard remains available at `http://localhost:5000` via `python web_vers.py`, but Streamlit is the primary demo surface.
+
+## Running Tests
+```bash
+# Run the full test suite
+python -m pytest tests/ -v
+
+# Run specific test modules
+python -m pytest tests/test_model.py -v
+python -m pytest tests/test_alert_utils.py -v
+python -m pytest tests/test_data_utils.py -v
+python -m pytest tests/test_realtime_vers.py -v
+```
+
+## Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| `TypeError` when loading model | Run `python seed_demo_data.py && python src/train_classifier.py` to regenerate |
+| Camera permission blocked | System Settings → Privacy & Security → Camera → enable for Terminal/IDE |
+| Low FPS / laggy video | Close other camera apps, use `--mode dashboard` |
+| "No frames delivered" | Restart the app, ensure camera is not in use by another process |
+| Model accuracy is low | Run `python src/orchestrate.py --calibrate` with your own hand |
 
 ## Expected Output Artifacts
 See `docs/expected_output/` for sample deliverables aligned with the Phase-1 presentation:
@@ -115,6 +187,7 @@ vers/
 ├── README.md
 ├── requirements.txt
 ├── .gitignore
+├── seed_demo_data.py
 ├── docs/
 │   ├── phase1_report_summary.md
 │   ├── workflow.png
@@ -135,6 +208,8 @@ vers/
 ├── models/
 │   ├── gesture_classifier.pkl
 │   └── reports/
+│       ├── classification_report.json
+│       └── confusion_matrix.png
 ├── src/
 │   ├── __init__.py
 │   ├── alert_server.py
@@ -145,21 +220,26 @@ vers/
 │   ├── vers_dashboard.py
 │   ├── web_vers.py
 │   └── utils/
+│       ├── __init__.py
 │       ├── alert_utils.py
 │       └── data_utils.py
 ├── templates/
 │   └── index.html
 ├── tests/
-│   └── test_model.py
-├── alert_server.py
-├── realtime_vers.py
-├── record_gestures.py
-├── train_classifier.py
-└── web_vers.py
+│   ├── conftest.py
+│   ├── test_alert_utils.py
+│   ├── test_data_utils.py
+│   ├── test_model.py
+│   └── test_realtime_vers.py
+├── alert_server.py      (compatibility launcher)
+├── realtime_vers.py     (compatibility launcher)
+├── record_gestures.py   (compatibility launcher)
+├── train_classifier.py  (compatibility launcher)
+└── web_vers.py          (compatibility launcher)
 ```
 
 ## Future Scope
-- Wake gesture and stateful pipeline
-- Severity fusion heuristics
+- Wake gesture and stateful idle/active pipeline
+- Trained emotion model to replace heuristic distress scoring
 - MQTT transport for downstream dispatch systems
 - ONNX export for edge deployment

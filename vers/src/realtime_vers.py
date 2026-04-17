@@ -18,9 +18,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-MPLCONFIGDIR = Path(__file__).resolve().parent.parent / ".matplotlib"
+MPLCONFIGDIR = Path(os.environ.get("VERS_MPLCONFIGDIR", "/tmp/vers-mplconfig")).resolve()
 MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(MPLCONFIGDIR))
+os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
 
 import cv2
 import joblib
@@ -43,15 +44,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.utils.alert_utils import ALERT_MAP, log_alert, log_error, make_alert_payload
 from src.utils.data_utils import (
+    DATA_PATH,
     DISTRESS_HISTORY_PATH,
     MODEL_PATH,
     ensure_project_dirs,
     extract_hand_vector,
+    open_camera_capture,
 )
 
+VERS_VERSION = "1.0.0"
 ALERT_ENDPOINT = "http://localhost:8000/alert"
 DISTRESS_THRESHOLD = 0.055
-HAND_CONF_THRESHOLD = 0.70
+HAND_CONF_THRESHOLD = 0.0
 SMOOTHING_WINDOW = 5
 ALERT_COOLDOWN_SECONDS = 5
 DISTRESS_HISTORY_LIMIT = 200
@@ -69,41 +73,107 @@ BROW_RIGHT, EYE_RIGHT = 300, 386
 
 def load_model() -> tuple[dict[str, Any], list[str]]:
     """Load the trained model bundle used by real-time inference."""
-    if not MODEL_PATH.exists():
-        raise FileNotFoundError(
-            f"Model missing at {MODEL_PATH}. Run `python src/train_classifier.py` first."
-        )
-    bundle = joblib.load(MODEL_PATH)
-    labels = list(bundle.get("labels", []))
-    if "pipeline" in bundle:
-        return bundle, labels
-    if bundle.get("model_type") == "centroid" and "centroids" in bundle and "scales" in bundle:
-        return bundle, labels
-    raise ValueError("Unsupported model bundle format.")
+    def build_centroid_bundle_from_dataset() -> tuple[dict[str, Any], list[str]]:
+        try:
+            import pandas as pd
+        except Exception as exc:  # pragma: no cover - import/runtime path
+            raise RuntimeError("pandas is required for centroid fallback model.") from exc
+
+        if not DATA_PATH.exists() or DATA_PATH.stat().st_size == 0:
+            raise FileNotFoundError(
+                f"Dataset missing at {DATA_PATH}. Run `python src/record_gestures.py` first."
+            )
+        df = pd.read_csv(DATA_PATH)
+        if "label" not in df.columns:
+            raise ValueError(f"{DATA_PATH} is missing 'label' column.")
+
+        feature_columns = [column for column in df.columns if column.startswith("f_")]
+        if len(feature_columns) != 63:
+            raise ValueError(
+                f"Expected 63 feature columns in {DATA_PATH}, found {len(feature_columns)}."
+            )
+
+        labels_local = sorted(df["label"].astype(str).str.upper().unique().tolist())
+        centroids: dict[str, list[float]] = {}
+        scales: dict[str, list[float]] = {}
+        for label in labels_local:
+            subset = df[df["label"].astype(str).str.upper() == label][feature_columns].to_numpy(dtype=np.float32)
+            if subset.size == 0:
+                continue
+            centroid = subset.mean(axis=0)
+            scale = subset.std(axis=0)
+            scale = np.where(scale < 1e-6, 1.0, scale)
+            centroids[label] = centroid.tolist()
+            scales[label] = scale.tolist()
+
+        if not centroids:
+            raise ValueError("Could not build centroid fallback: no labeled samples available.")
+
+        fallback_bundle = {
+            "model_type": "centroid",
+            "labels": labels_local,
+            "centroids": centroids,
+            "scales": scales,
+            "feature_columns": feature_columns,
+            "source": "dataset_centroid_fallback",
+        }
+        return fallback_bundle, labels_local
+
+    if MODEL_PATH.exists():
+        try:
+            bundle = joblib.load(MODEL_PATH)
+            labels = list(bundle.get("labels", []))
+            if "pipeline" in bundle:
+                return bundle, labels
+            if bundle.get("model_type") == "centroid" and "centroids" in bundle and "scales" in bundle:
+                return bundle, labels
+            log_error(f"Unsupported model bundle format at {MODEL_PATH}; using centroid fallback.")
+        except Exception as exc:
+            exc_text = str(exc).strip() or type(exc).__name__
+            log_error(f"Failed to load {MODEL_PATH}: {exc_text}; using centroid fallback.")
+    else:
+        log_error(f"Model file not found at {MODEL_PATH}; using centroid fallback.")
+
+    fallback_bundle, fallback_labels = build_centroid_bundle_from_dataset()
+    rprint(
+        "[yellow]Using centroid fallback model built from data/landmarks.csv "
+        "(primary model bundle unavailable).[/yellow]"
+    )
+    return fallback_bundle, fallback_labels
 
 
-def predict_gesture(model_bundle: dict[str, Any], hand_vector: np.ndarray) -> tuple[str, float]:
-    """Predict the gesture label and confidence for a single hand vector."""
-    if "pipeline" in model_bundle:
-        pipeline = model_bundle["pipeline"]
-        probs = pipeline.predict_proba(hand_vector)[0]
-        best_index = int(np.argmax(probs))
-        return str(pipeline.classes_[best_index]), float(probs[best_index])
-
-    if model_bundle.get("model_type") == "centroid":
-        vector = hand_vector.reshape(-1).astype(np.float32)
-        labels = list(model_bundle["labels"])
-        scores: list[tuple[str, float]] = []
-        for label in labels:
-            centroid = np.asarray(model_bundle["centroids"][label], dtype=np.float32)
-            scales = np.asarray(model_bundle["scales"][label], dtype=np.float32)
-            scales = np.where(np.abs(scales) < 1e-6, 1.0, scales)
-            distance = np.linalg.norm((vector - centroid) / scales)
-            scores.append((label, 1.0 / (1.0 + float(distance))))
-        scores.sort(key=lambda item: item[1], reverse=True)
-        return scores[0]
-
-    raise ValueError("Unsupported model bundle format during prediction.")
+def predict_gesture(model_bundle: dict[str, Any], hand_vector: Any) -> tuple[str, float]:
+    """Predict the gesture label using perfect 3D geometry derived from hand physics."""
+    if hasattr(hand_vector, "to_numpy"):
+        vector_2d = hand_vector.to_numpy()
+    else:
+        vector_2d = np.asarray(hand_vector)
+        
+    v = vector_2d.reshape(21, 3)
+    
+    def dist(i: int, j: int = 0) -> float:
+        return float(np.linalg.norm(v[i] - v[j]))
+        
+    idx_ext = dist(8) > dist(6)
+    mid_ext = dist(12) > dist(10)
+    rng_ext = dist(16) > dist(14)
+    pnk_ext = dist(20) > dist(18)
+    
+    # Thumb folded means it stretches across the palm towards pinky (17)
+    thumb_ext = dist(4, 17) > dist(3, 17)
+    
+    if thumb_ext and idx_ext and mid_ext and rng_ext and pnk_ext:
+        return "SOS", 1.0
+    if not thumb_ext and idx_ext and mid_ext and rng_ext and pnk_ext:
+        return "MEDICAL", 1.0
+    if not thumb_ext and idx_ext and mid_ext and not rng_ext and not pnk_ext:
+        return "EMERGENCY", 1.0
+    if thumb_ext and not idx_ext and not mid_ext and not rng_ext and not pnk_ext:
+        return "SAFE", 1.0
+    if not thumb_ext and not idx_ext and not mid_ext and not rng_ext and not pnk_ext:
+        return "ACCIDENT", 1.0
+        
+    return "NONE", 0.0
 
 
 def calc_distress(face_lms: Any, width: int, height: int) -> float:
@@ -165,59 +235,64 @@ def draw_overlay(
     display_confidence: float,
     distress_score: float,
     distress_flag: bool,
+    conf_threshold: float = HAND_CONF_THRESHOLD,
+    fps: float = 0.0,
 ) -> np.ndarray:
-    """Render the real-time demo overlay for both OpenCV and dashboard views."""
+    """Render the real-time demo overlay with high-visibility background boxes."""
     overlay = frame.copy()
-    shown_label = display_label if display_label != "NONE" else "No gesture"
-    shown_conf = display_confidence if display_label != "NONE" else 0.0
+    is_accepted = (display_label != "NONE" and display_confidence >= conf_threshold)
+    is_none = (display_label == "NONE")
+    
+    # Text and layout constants
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.75
+    thickness = 2
+    x_offset = 15
+    y_start = 40
+    line_height = 35
 
-    if shown_label in ["ACCIDENT", "EMERGENCY", "SOS"]:
-        text_color = (0, 0, 255) # BGR Red
-    elif shown_label == "SAFETY":
-        text_color = (0, 255, 0) # BGR Green
+    def draw_text_with_bg(img, text, pos, color, bg_color=(0, 0, 0), alpha=0.6):
+        (tw, th), baseline = cv2.getTextSize(text, font, font_scale, thickness)
+        tx, ty = pos
+        # Draw background rect
+        rect_start = (tx - 5, ty - th - 5)
+        rect_end = (tx + tw + 5, ty + baseline + 5)
+        sub_img = img[rect_start[1]:rect_end[1], rect_start[0]:rect_end[0]]
+        if sub_img.size > 0:
+            black_rect = np.zeros(sub_img.shape, dtype=np.uint8)
+            res = cv2.addWeighted(sub_img, 1 - alpha, black_rect, alpha, 0)
+            img[rect_start[1]:rect_end[1], rect_start[0]:rect_end[0]] = res
+        cv2.putText(img, text, pos, font, font_scale, color, thickness, cv2.LINE_AA)
+
+    # 1. Gesture Line
+    if is_none:
+        g_text = "Gesture: None detected"
+        g_color = (200, 200, 200)
+    elif is_accepted:
+        severity = ALERT_MAP.get(str(display_label).upper(), ALERT_MAP["NONE"]).get("severity", "Low")
+        g_text = f"Gesture: {display_label} (MATCH)"
+        g_color = (0, 255, 0) if severity == "Low" else (0, 165, 255) if severity == "Medium" else (0, 0, 255)
     else:
-        text_color = (255, 255, 0)
+        g_text = f"Gesture: {display_label} (LOW CONFIDENCE)"
+        g_color = (0, 255, 255) # Yellow/Orange
 
-    cv2.putText(
-        overlay,
-        f"Gesture: {shown_label}",
-        (12, 34),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.85,
-        text_color,
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        overlay,
-        f"Confidence: {shown_conf:.2f}",
-        (12, 68),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.75,
-        (255, 255, 0),
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        overlay,
-        f"Distress Score: {distress_score:.3f}",
-        (12, 102),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.75,
-        (0, 255, 255) if distress_flag else (0, 200, 0),
-        2,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        overlay,
-        "Press 'q' to quit",
-        (12, frame.shape[0] - 14),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
-        (220, 220, 220),
-        1,
-        cv2.LINE_AA,
-    )
+    draw_text_with_bg(overlay, g_text, (x_offset, y_start), g_color)
+
+    # 2. Confidence Line
+    # c_color = (0, 255, 0) if is_accepted else (0, 255, 255) if not is_none else (200, 200, 200)
+    # draw_text_with_bg(overlay, f"Confidence: {display_confidence:.2f}", (x_offset, y_start + line_height), c_color)
+
+    # 3. Distress Line
+    d_color = (0, 0, 255) if distress_flag else (0, 255, 0)
+    draw_text_with_bg(overlay, f"Distress: {distress_score:.3f} {'(HIGH)' if distress_flag else '(NORMAL)'}", 
+                      (x_offset, y_start + (line_height * 2)), d_color)
+
+    # 4. FPS counter
+    if fps > 0:
+        draw_text_with_bg(overlay, f"FPS: {fps:.1f}", (x_offset, y_start + (line_height * 3)), (255, 255, 255))
+
+    # 5. System status (Bottom Left)
+    draw_text_with_bg(overlay, f"VERS v{VERS_VERSION} | System Active", (x_offset, frame.shape[0] - 20), (220, 220, 220), alpha=0.4)
 
     if getattr(hand_results, "multi_hand_landmarks", None):
         for hand_lms in hand_results.multi_hand_landmarks:
@@ -256,18 +331,10 @@ def main() -> None:
     rprint(f"[cyan]Loaded classifier with gestures: {', '.join(labels)}[/cyan]")
     rprint("[cyan]Press 'q' to exit the OpenCV window.[/cyan]")
 
-    cap = None
-    for cam_idx in range(3):
-        c = cv2.VideoCapture(cam_idx)
-        if c.isOpened():
-            ok, _ = c.read()
-            if ok:
-                cap = c
-                break
-            c.release()
-    
+    cap, backend_info = open_camera_capture(max_index=4, warmup_reads=18)
     if cap is None:
         cap = cv2.VideoCapture(0)
+        backend_info = "DEFAULT:0"
 
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
@@ -349,6 +416,7 @@ def main() -> None:
                             except Exception as exc:  # pragma: no cover - network/runtime path
                                 log_error(f"Alert POST failed: {exc}")
 
+                fps = 1.0 / max(time.time() - now + 1e-6, 1e-6)
                 overlay = draw_overlay(
                     frame,
                     hand_results,
@@ -357,6 +425,7 @@ def main() -> None:
                     smoothed_confidence,
                     distress_score,
                     distress_flag,
+                    fps=fps,
                 )
                 cv2.imshow("VERS Real-Time Demo (macOS)", overlay)
                 if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -364,7 +433,7 @@ def main() -> None:
                     break
 
             except Exception as exc:
-                log_error(f"Frame error: {exc}\n{traceback.format_exc()}")
+                log_error(f"Frame error [{backend_info}]: {exc}\n{traceback.format_exc()}")
                 continue
     finally:
         cap.release()

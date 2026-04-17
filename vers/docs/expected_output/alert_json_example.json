@@ -1,12 +1,14 @@
 {
-  "AlertID": "GEN_1774628671",
-  "Timestamp": "2026-03-27T16:24:31.538634+00:00",
+  "AlertID": "GEN_20260418T000000000000Z",
+  "Timestamp": "2026-04-18T00:00:00.000000Z",
   "Location": "Simulated Booth A12",
   "Severity": "High",
-  "MainGesture": "DANGER",
+  "BaseSeverity": "High",
+  "FusionScore": 0.782,
+  "MainGesture": "SOS",
   "GestureConfidence": 0.93,
-  "DistressScore": 0.707,
+  "DistressScore": 0.072,
   "DistressFlag": true,
-  "Message": "Immediate danger reported",
+  "Message": "General SOS request (Open Hand)",
   "SecondaryEmotion": "High Distress"
 }

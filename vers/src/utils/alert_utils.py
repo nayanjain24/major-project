@@ -16,12 +16,16 @@ from typing import Any
 from .data_utils import ALERT_LOG_PATH, ERROR_LOG_PATH
 
 ALERT_MAP: dict[str, dict[str, str]] = {
-    "ACCIDENT": {"message": "Accident detected (Fist)", "severity": "High"},
-    "EMERGENCY": {"message": "Medical/General emergency (Full Palm)", "severity": "Critical"},
-    "SOS": {"message": "SOS request (Peace)", "severity": "High"},
-    "SAFETY": {"message": "Safety confirmed (Thumbs up)", "severity": "Low"},
+    # Phase-1 demo labels (Custom Mapping)
+    "SOS": {"message": "General SOS request (Open Hand)", "severity": "High"},
+    "EMERGENCY": {"message": "Urgent Emergency! (2 Fingers)", "severity": "Critical"},
+    "ACCIDENT": {"message": "Accident reported (Fist)", "severity": "High"},
+    "MEDICAL": {"message": "Medical assistance needed (4 Fingers)", "severity": "High"},
+    "SAFE": {"message": "Status: Safe (Thumbs Up)", "severity": "Low"},
     "NONE": {"message": "No mapped gesture", "severity": "Low"},
 }
+SEVERITY_ORDER = {"Low": 1, "Medium": 2, "High": 3, "Critical": 4}
+SEVERITY_BY_ORDER = {value: key for key, value in SEVERITY_ORDER.items()}
 
 _alert_logger: logging.Logger | None = None
 _error_logger: logging.Logger | None = None
@@ -31,6 +35,43 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def normalize_label(label: str) -> str:
+    """Return a canonical uppercase label for alert mapping."""
+    normalized = str(label or "").strip().upper()
+    return normalized if normalized else "NONE"
+
+
+def calculate_fused_severity(
+    confidence: float,
+    distress_score: float,
+    base_severity: str,
+) -> tuple[str, float]:
+    """Fuse gesture confidence + distress score into a final severity class.
+
+    We keep this simple and demo-friendly:
+    - 60% weight: gesture confidence
+    - 40% weight: normalized distress score
+    - final severity never drops below the gesture's base severity
+    """
+    conf = max(0.0, min(1.0, float(confidence)))
+    normalized_distress = max(0.0, min(1.0, float(distress_score) / 0.12))
+    fusion_score = 0.6 * conf + 0.4 * normalized_distress
+
+    if fusion_score >= 0.85:
+        derived = "Critical"
+    elif fusion_score >= 0.65:
+        derived = "High"
+    elif fusion_score >= 0.45:
+        derived = "Medium"
+    else:
+        derived = "Low"
+
+    base_rank = SEVERITY_ORDER.get(base_severity, SEVERITY_ORDER["Low"])
+    derived_rank = SEVERITY_ORDER[derived]
+    final_rank = max(base_rank, derived_rank)
+    return SEVERITY_BY_ORDER[final_rank], float(fusion_score)
+
+
 def make_alert_payload(
     label: str,
     confidence: float,
@@ -38,14 +79,22 @@ def make_alert_payload(
     distress_flag: bool,
 ) -> dict[str, Any]:
     """Build the canonical Phase-1 alert payload."""
-    info = ALERT_MAP.get(label, ALERT_MAP["NONE"])
+    normalized_label = normalize_label(label)
+    info = ALERT_MAP.get(normalized_label, ALERT_MAP["NONE"])
+    fused_severity, fusion_score = calculate_fused_severity(
+        confidence,
+        distress_score,
+        info["severity"],
+    )
     timestamp = _utc_now()
     return {
         "AlertID": timestamp.strftime("GEN_%Y%m%dT%H%M%S%fZ"),
         "Timestamp": timestamp.isoformat().replace("+00:00", "Z"),
         "Location": "Simulated Booth A12",
-        "Severity": info["severity"],
-        "MainGesture": label,
+        "Severity": fused_severity,
+        "BaseSeverity": info["severity"],
+        "FusionScore": round(float(fusion_score), 3),
+        "MainGesture": normalized_label,
         "GestureConfidence": round(float(confidence), 3),
         "DistressScore": round(float(distress_score), 3),
         "DistressFlag": bool(distress_flag),

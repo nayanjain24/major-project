@@ -16,9 +16,10 @@ import os
 import time
 from pathlib import Path
 
-MPLCONFIGDIR = Path(__file__).resolve().parent.parent / ".matplotlib"
+MPLCONFIGDIR = Path(os.environ.get("VERS_MPLCONFIGDIR", "/tmp/vers-mplconfig")).resolve()
 MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(MPLCONFIGDIR))
+os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
 
 import cv2
 import mediapipe as mp
@@ -32,7 +33,13 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     rprint = print
 
-from src.utils.data_utils import DATA_PATH, csv_header, ensure_project_dirs, extract_hand_vector
+from src.utils.data_utils import (
+    DATA_PATH,
+    csv_header,
+    ensure_project_dirs,
+    extract_hand_vector,
+    open_camera_capture,
+)
 
 mp_hands = mp.solutions.hands
 mp_drawing = mp.solutions.drawing_utils
@@ -54,7 +61,9 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     need_header = not output_path.exists() or os.path.getsize(output_path) == 0
 
-    cap = cv2.VideoCapture(0)
+    cap, _backend_info = open_camera_capture(max_index=4, warmup_reads=18)
+    if cap is None:
+        cap = cv2.VideoCapture(0)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)

@@ -14,9 +14,10 @@ from pathlib import Path
 from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-MPLCONFIGDIR = PROJECT_ROOT / ".matplotlib"
+MPLCONFIGDIR = Path(os.environ.get("VERS_MPLCONFIGDIR", "/tmp/vers-mplconfig")).resolve()
 MPLCONFIGDIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(MPLCONFIGDIR))
+os.environ.setdefault("OPENCV_AVFOUNDATION_SKIP_AUTH", "1")
 
 import cv2
 from flask import Flask, Response, jsonify, render_template
@@ -34,7 +35,7 @@ from src.realtime_vers import (
     smooth_prediction,
 )
 from src.utils.alert_utils import make_alert_payload
-from src.utils.data_utils import ensure_project_dirs, extract_hand_vector
+from src.utils.data_utils import ensure_project_dirs, extract_hand_vector, open_camera_capture
 
 TEMPLATE_DIR = PROJECT_ROOT / "templates"
 
@@ -110,16 +111,7 @@ class FlaskRuntime:
                 self._status["error"] = str(exc)
             return
 
-        cap = None
-        for cam_idx in range(3):
-            c = cv2.VideoCapture(cam_idx)
-            if c.isOpened():
-                ok, _ = c.read()
-                if ok:
-                    cap = c
-                    break
-                c.release()
-        
+        cap, _backend_info = open_camera_capture(max_index=4, warmup_reads=18)
         if cap is None:
             cap = cv2.VideoCapture(0)
 

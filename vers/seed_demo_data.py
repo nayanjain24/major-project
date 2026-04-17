@@ -20,23 +20,33 @@ def build_pose(kind):
     rng_str = [[0.59, 0.78, -0.01], [0.60, 0.63, -0.02], [0.61, 0.49, -0.03], [0.62, 0.35, -0.04]]
     pnk_str = [[0.68, 0.82, 0.00], [0.70, 0.70, -0.01], [0.72, 0.58, -0.02], [0.74, 0.47, -0.03]]
 
-    idx_fld = [[0.41, 0.77, -0.01], [0.41, 0.70, -0.02], [0.41, 0.74, -0.01], [0.41, 0.80, 0.00]]
-    mid_fld = [[0.50, 0.75, -0.01], [0.50, 0.68, -0.02], [0.50, 0.72, -0.01], [0.50, 0.78, 0.00]]
-    rng_fld = [[0.59, 0.78, -0.01], [0.59, 0.71, -0.02], [0.59, 0.75, -0.01], [0.59, 0.81, 0.00]]
-    pnk_fld = [[0.68, 0.82, 0.00], [0.68, 0.75, -0.01], [0.68, 0.79, 0.00], [0.68, 0.85, 0.01]]
+    idx_fld = [[0.41, 0.77, -0.01], [0.45, 0.85, 0.01], [0.48, 0.82, 0.02], [0.51, 0.80, 0.03]]
+    mid_fld = [[0.50, 0.75, -0.01], [0.53, 0.83, 0.01], [0.55, 0.80, 0.02], [0.57, 0.78, 0.03]]
+    rng_fld = [[0.59, 0.78, -0.01], [0.61, 0.84, 0.01], [0.63, 0.81, 0.02], [0.65, 0.79, 0.03]]
+    pnk_fld = [[0.68, 0.82, 0.00], [0.70, 0.86, 0.01], [0.71, 0.83, 0.02], [0.72, 0.81, 0.03]]
 
-    if kind == "EMERGENCY":
+    if kind == "SOS":  # Full hand (Open)
         thumb = thumb_open
         fingers = [idx_str, mid_str, rng_str, pnk_str]
-    elif kind == "ACCIDENT":
-        thumb = thumb_folded
-        fingers = [idx_fld, mid_fld, rng_fld, pnk_fld]
-    elif kind == "SOS":
+    elif kind == "EMERGENCY":  # 2 Fingers (V)
         thumb = thumb_folded
         fingers = [idx_str, mid_str, rng_fld, pnk_fld]
-    elif kind == "SAFETY":
+        # Spread V a bit
+        for f in fingers[0]: f[0] -= 0.05
+        for f in fingers[1]: f[0] += 0.05
+    elif kind == "ACCIDENT":  # Fist
+        thumb = thumb_folded
+        fingers = [idx_fld, mid_fld, rng_fld, pnk_fld]
+    elif kind == "MEDICAL":  # 4 Fingers (Straight, thumb folded)
+        thumb = thumb_folded
+        fingers = [idx_str, mid_str, rng_str, pnk_str]
+    elif kind == "SAFE":  # Thumbs Up
         thumb = thumb_straight
         fingers = [idx_fld, mid_fld, rng_fld, pnk_fld]
+        # Ensure thumb is pointing 'up' in landmark-space (Y decreases)
+        for i in range(1, 4):
+            thumb[i][1] = thumb[0][1] - (0.1 * i)
+            thumb[i][0] = thumb[0][0]
     else:
         raise ValueError(f"Unknown pose kind: {kind}")
 
@@ -44,28 +54,31 @@ def build_pose(kind):
 
 
 def transform_pose(pose, rng):
+    """Normalize pose by simulated hand scale and add rotation/noise augmentation."""
     centered = pose.copy()
-    centered[:, :2] -= centered[0, :2]
-
-    angle = rng.normal(0.0, 0.10)
-    scale = rng.uniform(0.90, 1.10)
-    tx = rng.uniform(0.42, 0.58)
-    ty = rng.uniform(0.84, 0.95)
-
-    rot = np.array(
-        [
-            [np.cos(angle), -np.sin(angle)],
-            [np.sin(angle), np.cos(angle)],
-        ]
-    )
-    centered[:, :2] = centered[:, :2] @ rot.T
-    centered[:, :2] *= scale
-    centered[:, 0] += tx
-    centered[:, 1] += ty
-    centered[:, 2] += rng.normal(0.0, 0.01, size=centered.shape[0])
-    centered += rng.normal(0.0, 0.008, size=centered.shape)
-    centered[:, 0] = np.clip(centered[:, 0], 0.0, 1.0)
-    centered[:, 1] = np.clip(centered[:, 1], 0.0, 1.0)
+    
+    # Random rotation matrix (simplified Euler)
+    # We apply small rotations to make the model robust to tilt
+    rx = rng.uniform(-0.15, 0.15)
+    ry = rng.uniform(-0.15, 0.15)
+    rz = rng.uniform(-0.35, 0.35) # Roll
+    
+    # Rotation about Z (roll)
+    c, s = np.cos(rz), np.sin(rz)
+    rot_z = np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
+    centered = centered @ rot_z.T
+    
+    # Recenter wrist (index 0) to (0,0,0)
+    centered -= centered[0]
+    
+    # Calculate scale factor from simulated landmarks (wrist index 0, mid-mcp index 9)
+    # This must match our real-time normalization logic in data_utils.py
+    scale = np.linalg.norm(centered[9]) + 1e-6
+    centered /= scale
+    
+    # Add noise
+    centered += rng.normal(0.0, 0.015, size=centered.shape)
+    
     return centered
 
 
@@ -80,7 +93,7 @@ def main():
     outfile.parent.mkdir(parents=True, exist_ok=True)
 
     rng = np.random.default_rng(args.seed)
-    labels = ["ACCIDENT", "EMERGENCY", "SOS", "SAFETY"]
+    labels = ["SOS", "EMERGENCY", "ACCIDENT", "MEDICAL", "SAFE"]
     bases = {label: build_pose(label) for label in labels}
 
     with outfile.open("w", newline="") as f:

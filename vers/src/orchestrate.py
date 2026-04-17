@@ -21,7 +21,9 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     rprint = print
 
-GESTURES = {"HELP": 180, "MEDICAL": 180, "DANGER": 180}
+GESTURES = {
+    "SOS": 180, "EMERGENCY": 180, "ACCIDENT": 180, "MEDICAL": 180, "SAFE": 180
+}
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 RECORD = PROJECT_ROOT / "src" / "record_gestures.py"
@@ -71,6 +73,26 @@ def main() -> None:
         action="store_true",
         help="Retrain the classifier even if models/gesture_classifier.pkl already exists.",
     )
+    parser.add_argument(
+        "--mode",
+        choices=("dashboard", "realtime", "hybrid"),
+        default="dashboard",
+        help=(
+            "Demo mode: `dashboard` (recommended, Streamlit live camera), "
+            "`realtime` (OpenCV window), or `hybrid` (dashboard + OpenCV; may contend for camera)."
+        ),
+    )
+    parser.add_argument(
+        "--dashboard-port",
+        type=int,
+        default=8501,
+        help="Port for Streamlit when dashboard mode is used.",
+    )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Interactively record your own hand samples for each gesture (recommended).",
+    )
     args = parser.parse_args()
 
     os.chdir(PROJECT_ROOT)
@@ -80,9 +102,39 @@ def main() -> None:
         rprint("[bold red]Activate the project .venv before running orchestrate.py.[/bold red]")
         sys.exit(1)
 
+    should_calibrate = args.calibrate
     should_capture = args.force_capture or not (DATA_PATH.exists() and DATA_PATH.stat().st_size > 0)
-    should_train = args.force_train or not MODEL_PATH.exists()
+    should_train = args.force_train or not MODEL_PATH.exists() or should_calibrate
 
+    GESTURE_DESCRIPTIONS = {
+        "SOS": "Open Hand — spread all 5 fingers wide",
+        "EMERGENCY": "V-Shape — raise index + middle finger (2 fingers)",
+        "ACCIDENT": "Fist — close all fingers into a fist",
+        "MEDICAL": "4 Fingers — extend index through pinky, fold thumb",
+        "SAFE": "Thumbs Up — fist with thumb pointing up",
+    }
+
+    if should_calibrate:
+        rprint("\n[bold yellow]!!! Calibration Mode !!![/bold yellow]")
+        rprint("[cyan]This will record your real hand signs to ensure perfect accuracy.[/cyan]")
+        rprint("[cyan]A window will open for EACH gesture. Perform the sign until capture finishes.[/cyan]")
+        
+        # Backup or clear old data for a clean calibration
+        if DATA_PATH.exists():
+            backup = DATA_PATH.with_suffix(".csv.bak")
+            DATA_PATH.replace(backup)
+            rprint(f"[dim]Existing data backed up to {backup.name}[/dim]")
+        
+        for label, samples in GESTURES.items():
+            desc = GESTURE_DESCRIPTIONS.get(label, label)
+            rprint(f"\n[bold green]Ready for '{label}'?[/bold green]")
+            rprint(f"[dim]Gesture: {desc}. Press Enter to start...[/dim]")
+            input()
+            _run([python_exec, str(RECORD), "--label", label, "--samples", str(samples)],
+                 f"Calibrating {label}")
+            time.sleep(1)
+        should_capture = False  # Skip the automatic capture after calibration
+    
     if should_capture:
         rprint("[bold blue]Phase 1: Gesture data capture[/bold blue]")
         for label, samples in GESTURES.items():
@@ -108,18 +160,48 @@ def main() -> None:
         alert_proc = _run([python_exec, str(ALERT_SERVER)], "Mock alert server", background=True)
         time.sleep(2)
 
-        dashboard_proc = _run(
-            [python_exec, "-m", "streamlit", "run", str(DASHBOARD), "--server.headless=true"],
-            "Streamlit dashboard",
-            background=True,
-        )
-        rprint("[cyan]Streamlit dashboard available at http://localhost:8501[/cyan]")
-        rprint("[cyan]Legacy Flask dashboard remains available via `python web_vers.py`.[/cyan]")
-        time.sleep(4)
+        if args.mode == "dashboard":
+            rprint("\n[bold blue]Phase 4: Dashboard demo (recommended)[/bold blue]")
+            rprint(f"[cyan]Open http://localhost:{args.dashboard_port} in your browser.[/cyan]")
+            rprint("[cyan]Use Start Stream inside Streamlit to begin live camera inference.[/cyan]")
+            _run(
+                [
+                    python_exec,
+                    "-m",
+                    "streamlit",
+                    "run",
+                    str(DASHBOARD),
+                    f"--server.port={args.dashboard_port}",
+                ],
+                "Streamlit dashboard",
+            )
+        elif args.mode == "realtime":
+            rprint("\n[bold blue]Phase 4: Real-time OpenCV demo[/bold blue]")
+            rprint("[cyan]Press 'q' in the OpenCV window to exit.[/cyan]")
+            _run([python_exec, str(REALTIME)], "Real-time VERS demo")
+        else:
+            dashboard_proc = _run(
+                [
+                    python_exec,
+                    "-m",
+                    "streamlit",
+                    "run",
+                    str(DASHBOARD),
+                    f"--server.port={args.dashboard_port}",
+                    "--server.headless=true",
+                ],
+                "Streamlit dashboard",
+                background=True,
+            )
+            rprint(f"[cyan]Streamlit dashboard available at http://localhost:{args.dashboard_port}[/cyan]")
+            rprint(
+                "[yellow]Hybrid mode can cause webcam contention if both apps open the camera simultaneously.[/yellow]"
+            )
+            time.sleep(4)
 
-        rprint("\n[bold blue]Phase 4: Real-time demo[/bold blue]")
-        rprint("[cyan]Press 'q' in the OpenCV window to exit.[/cyan]")
-        _run([python_exec, str(REALTIME)], "Real-time VERS demo")
+            rprint("\n[bold blue]Phase 4: Real-time OpenCV demo[/bold blue]")
+            rprint("[cyan]Press 'q' in the OpenCV window to exit.[/cyan]")
+            _run([python_exec, str(REALTIME)], "Real-time VERS demo")
     finally:
         rprint("\n[bold blue]Cleaning up background processes...[/bold blue]")
         for proc, name in ((dashboard_proc, "Streamlit dashboard"), (alert_proc, "Alert server")):

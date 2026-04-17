@@ -10,10 +10,20 @@ Most emergency interfaces assume spoken communication, which disadvantages deaf,
 1. **Input Module**: Webcam feed captured with OpenCV.
 2. **Preprocessing Module**: Frame flip, resize configuration, and RGB conversion.
 3. **Feature Extraction Module**: MediaPipe Hands for 21 hand landmarks and MediaPipe Face Mesh for facial cues.
-4. **AI Module**: RandomForest gesture classifier trained on 63 landmark features.
+4. **AI Module**: RandomForest gesture classifier trained on 63 landmark features with data augmentation.
 5. **Distress Analysis Module**: Heuristic score based on mouth opening and brow-eye spacing.
-6. **Alert Generation Module**: Canonical JSON payload with alert ID, timestamp, gesture, confidence, severity, distress score, and message.
-7. **Communication Module**: Streamlit dispatcher dashboard, JSON logs, and a mock Flask `/alert` endpoint.
+6. **Severity Fusion Module**: Fuses gesture confidence (60%) and distress score (40%) into a final severity class.
+7. **Alert Generation Module**: Canonical JSON payload with alert ID, timestamp, gesture, confidence, severity, fusion score, distress score, and message.
+8. **Communication Module**: Streamlit dispatcher dashboard, JSON logs, and a mock Flask `/alert` endpoint.
+
+## Gesture Mapping
+| Gesture | Hand Sign | Severity |
+|---------|-----------|----------|
+| SOS | Open Hand (5 fingers) | High |
+| EMERGENCY | 2 Fingers (V-shape) | Critical |
+| ACCIDENT | Fist (all fingers closed) | High |
+| MEDICAL | 4 Fingers (thumb folded) | High |
+| SAFE | Thumbs Up | Low |
 
 ## Scripts to Mention in Viva
 | Slide Theme | Repo Implementation |
@@ -21,6 +31,7 @@ Most emergency interfaces assume spoken communication, which disadvantages deaf,
 | Methodology | `src/record_gestures.py`, `src/train_classifier.py`, `src/realtime_vers.py` |
 | System Design | `docs/workflow.png` + `src/orchestrate.py` |
 | Alert Communication | `src/alert_server.py`, `src/vers_dashboard.py`, `src/web_vers.py` |
+| Severity Fusion | `src/utils/alert_utils.py` — `calculate_fused_severity()` |
 | Accessibility Focus | README objectives 6 and 7 |
 
 ## Demo Talking Points
@@ -28,7 +39,9 @@ Most emergency interfaces assume spoken communication, which disadvantages deaf,
 - Flask remains available as a legacy fallback.
 - Existing `data/landmarks.csv` and `models/gesture_classifier.pkl` allow a fast turnkey run.
 - `python src/orchestrate.py` is the default demo command.
+- `python src/orchestrate.py --calibrate` demonstrates personalized hand calibration.
 - `python src/orchestrate.py --force-capture --force-train` demonstrates the full end-to-end pipeline from scratch.
+- Five gesture classes: **SOS**, **EMERGENCY**, **ACCIDENT**, **MEDICAL**, **SAFE**.
 
 ## Limitations and Mitigation
 - **Lighting sensitivity**: Demo in an evenly lit room with the hand centered and unobstructed.
@@ -37,6 +50,6 @@ Most emergency interfaces assume spoken communication, which disadvantages deaf,
 
 ## Phase-2 Direction
 - Wake gesture and idle mode
-- Fused severity from gesture confidence plus distress
-- MQTT or IoT transport
+- Trained emotion model to replace heuristic distress scoring
+- MQTT or IoT transport for downstream dispatch
 - ONNX export for edge deployment

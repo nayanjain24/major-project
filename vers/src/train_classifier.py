@@ -10,15 +10,21 @@ Phase-1 Alignment
 from __future__ import annotations
 
 import argparse
+import json
 import warnings
 from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 
 import joblib
+import matplotlib
+matplotlib.use("Agg")  # Non-interactive backend for saving PNGs
+import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_val_score, train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -39,7 +45,9 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from src.utils.data_utils import DATA_PATH, MODEL_PATH, ensure_project_dirs
+from src.utils.data_utils import DATA_PATH, MODEL_DIR, MODEL_PATH, ensure_project_dirs
+
+REPORTS_DIR = MODEL_DIR / "reports"
 
 
 def _render_confusion_matrix(labels: list[str], matrix) -> None:
@@ -59,17 +67,59 @@ def _render_confusion_matrix(labels: list[str], matrix) -> None:
     console.print(table)
 
 
+def _save_confusion_matrix_png(labels: list[str], matrix, output_path: Path) -> None:
+    """Save a publication-quality confusion matrix as a PNG image."""
+    fig, ax = plt.subplots(figsize=(8, 6))
+    im = ax.imshow(matrix, interpolation="nearest", cmap=plt.cm.Blues)
+    ax.figure.colorbar(im, ax=ax)
+
+    ax.set(
+        xticks=np.arange(matrix.shape[1]),
+        yticks=np.arange(matrix.shape[0]),
+        xticklabels=labels,
+        yticklabels=labels,
+        ylabel="Actual",
+        xlabel="Predicted",
+        title="Confusion Matrix",
+    )
+    plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+
+    # Annotate each cell with the count
+    thresh = matrix.max() / 2.0
+    for i in range(matrix.shape[0]):
+        for j in range(matrix.shape[1]):
+            ax.text(
+                j, i, format(matrix[i, j], "d"),
+                ha="center", va="center",
+                color="white" if matrix[i, j] > thresh else "black",
+                fontsize=14, fontweight="bold",
+            )
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    console.print(f"[cyan]Confusion matrix saved to {output_path}[/cyan]")
+
+
+def _save_classification_report_json(y_test, y_pred, labels: list[str], output_path: Path) -> None:
+    """Save the sklearn classification report as a JSON file."""
+    report = classification_report(y_test, y_pred, target_names=labels, output_dict=True)
+    output_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    console.print(f"[cyan]Classification report saved to {output_path}[/cyan]")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train the VERS gesture classifier.")
     parser.add_argument("--model", default=str(MODEL_PATH), help="Path to save the trained model bundle.")
     args = parser.parse_args()
 
     ensure_project_dirs()
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
     warnings.filterwarnings("ignore", category=UserWarning)
 
     if not DATA_PATH.exists() or DATA_PATH.stat().st_size == 0:
         console.print(f"[bold red]Dataset missing at {DATA_PATH}.[/bold red]")
-        console.print("Run `python src/record_gestures.py` first to collect landmarks.")
+        console.print("Run `python seed_demo_data.py` or `python src/record_gestures.py` first to collect landmarks.")
         return
 
     df = pd.read_csv(DATA_PATH)
@@ -80,7 +130,7 @@ def main() -> None:
     if len(feature_columns) != 63:
         raise ValueError(
             f"Expected 63 landmark features, found {len(feature_columns)}. "
-            "Please regenerate the dataset with `python src/record_gestures.py`."
+            "Please regenerate the dataset with `python seed_demo_data.py`."
         )
 
     if df["label"].nunique() < 2:
@@ -96,6 +146,15 @@ def main() -> None:
         X, y, test_size=0.2, random_state=42, stratify=y,
     )
 
+    console.print("\n[bold green]Augmenting training data for robustness...[/bold green]")
+    # Add Gaussian noise to create variants of the original samples
+    noise_factor = 0.005
+    X_aug = X_train.copy()
+    X_aug += np.random.normal(0, noise_factor, X_aug.shape)
+
+    X_final = pd.concat([X_train, X_aug])
+    y_final = pd.concat([y_train, y_train])
+
     pipeline = Pipeline(
         [
             ("scaler", StandardScaler()),
@@ -103,8 +162,14 @@ def main() -> None:
         ]
     )
 
+    # Cross-validation on training data before final fit
+    console.print("\n[bold green]Running 5-fold cross-validation...[/bold green]")
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    cv_scores = cross_val_score(pipeline, X_final.values, y_final.values, cv=cv, scoring="accuracy")
+    console.print(f"CV Accuracy: {cv_scores.mean():.3f} ± {cv_scores.std():.3f}")
+
     console.print("\n[bold green]Training gesture classifier...[/bold green]")
-    pipeline.fit(X_train, y_train)
+    pipeline.fit(X_final.values, y_final.values)
 
     y_pred = pipeline.predict(X_test)
     accuracy = accuracy_score(y_test, y_pred)
@@ -115,28 +180,49 @@ def main() -> None:
         summary = Table(title="Model Evaluation Summary", show_header=True)
         summary.add_column("Metric", style="cyan")
         summary.add_column("Value", style="magenta")
-        summary.add_row("Accuracy", f"{accuracy:.3f}")
+        summary.add_row("Test Accuracy", f"{accuracy:.3f}")
+        summary.add_row("CV Accuracy (mean)", f"{cv_scores.mean():.3f}")
+        summary.add_row("CV Accuracy (std)", f"{cv_scores.std():.3f}")
         summary.add_row("Classes", ", ".join(labels))
+        summary.add_row("Training Samples", str(len(X_final)))
+        summary.add_row("Test Samples", str(len(X_test)))
         console.print(summary)
     else:
-        console.print(f"Accuracy: {accuracy:.3f}")
+        console.print(f"Test Accuracy: {accuracy:.3f}")
+        console.print(f"CV Accuracy: {cv_scores.mean():.3f} ± {cv_scores.std():.3f}")
 
     console.print("\n[bold]Classification Report[/bold]")
     console.print(classification_report(y_test, y_pred))
     _render_confusion_matrix(labels, matrix)
 
+    # Save reports
+    _save_classification_report_json(y_test, y_pred, labels, REPORTS_DIR / "classification_report.json")
+    _save_confusion_matrix_png(labels, matrix, REPORTS_DIR / "confusion_matrix.png")
+
+    # Save model bundle with metadata
     model_out = Path(args.model)
     model_out.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(
-        {
-            "model_type": "sklearn_pipeline",
-            "pipeline": pipeline,
-            "labels": labels,
-            "feature_columns": feature_columns,
+    bundle = {
+        "model_type": "sklearn_pipeline",
+        "pipeline": pipeline,
+        "labels": labels,
+        "feature_columns": feature_columns,
+        "training_metadata": {
+            "trained_at": datetime.now(timezone.utc).isoformat(),
+            "total_samples": len(df),
+            "training_samples": len(X_final),
+            "test_samples": len(X_test),
+            "test_accuracy": round(accuracy, 4),
+            "cv_accuracy_mean": round(float(cv_scores.mean()), 4),
+            "cv_accuracy_std": round(float(cv_scores.std()), 4),
+            "augmentation": f"Gaussian noise (σ={noise_factor})",
+            "n_estimators": 300,
+            "max_depth": 12,
         },
-        model_out,
-    )
-    console.print(f"[cyan]Model saved to {model_out}[/cyan]")
+    }
+    joblib.dump(bundle, model_out)
+    console.print(f"\n[bold cyan]Model saved to {model_out}[/bold cyan]")
+    console.print("[bold green]Training complete.[/bold green]")
 
 
 if __name__ == "__main__":
