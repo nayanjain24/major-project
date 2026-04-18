@@ -1,0 +1,28 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: datafusion
+      POSTGRES_PASSWORD: datafusion
+      POSTGRES_DB: datafusion
+    ports:
+      - "5432:5432"
+    volumes:
+      - datafusion-db:/var/lib/postgresql/data
+
+  api:
+    build: .
+    environment:
+      DATAFUSION_DATABASE_URL: postgresql+psycopg2://datafusion:datafusion@db:5432/datafusion
+      DATAFUSION_STORAGE_DIR: /app/storage
+      DATAFUSION_OPENAI_API_KEY: ${DATAFUSION_OPENAI_API_KEY:-}
+      DATAFUSION_OPENAI_MODEL: ${DATAFUSION_OPENAI_MODEL:-gpt-4o-mini}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage
+    depends_on:
+      - db
+
+volumes:
+  datafusion-db:

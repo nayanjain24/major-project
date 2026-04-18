@@ -1,0 +1,23 @@
+[
+  {
+    "id": 1,
+    "name": "amazon_prime_titles.csv",
+    "filename": "storage/amazon_prime_titles.csv",
+    "rows": 9668,
+    "cols": 12
+  },
+  {
+    "id": 2,
+    "name": "employees.xlsx",
+    "filename": "storage/employees.xlsx",
+    "rows": 1000,
+    "cols": 8
+  },
+  {
+    "id": 3,
+    "name": "Revenue sales data.xlsx",
+    "filename": "storage/Revenue_sales_data.xlsx",
+    "rows": 34867,
+    "cols": 14
+  }
+]

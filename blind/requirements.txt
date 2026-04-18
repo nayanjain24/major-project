@@ -1,0 +1,21 @@
+# Core numerical operations
+numpy>=1.24.0
+
+# Computer vision utilities (camera capture, frame processing)
+opencv-python>=4.8.0
+
+# Pose/hand/face tracking for sign-language landmark extraction
+mediapipe>=0.10.0
+
+# Deep learning framework for training/inference
+torch>=2.1.0
+torchvision>=0.16.0
+torchaudio>=2.1.0
+
+# Facial analysis (emotion inference)
+deepface>=0.0.92
+
+# Local web app UI for real-time demo
+streamlit>=1.32.0
+streamlit-webrtc>=0.47.0
+av>=11.0.0

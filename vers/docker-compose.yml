@@ -1,0 +1,46 @@
+# ===========================================================
+# VERS v3.0 — Docker Compose Orchestration
+# ===========================================================
+# Launch:  docker-compose up --build
+# Stop:    docker-compose down
+# ===========================================================
+
+version: "3.8"
+
+services:
+  vers-api:
+    build: .
+    container_name: vers-api
+    command: uvicorn src.api.main:app --host 0.0.0.0 --port 8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./data:/app/data
+    environment:
+      - VERS_LOG_LEVEL=INFO
+      - VERS_NOTIFY_CHANNELS=tts
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v1/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  vers-dashboard:
+    build: .
+    container_name: vers-dashboard
+    command: python -m streamlit run src/vers_dashboard.py --server.port=8501 --server.address=0.0.0.0
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./logs:/app/logs
+      - ./models:/app/models
+      - ./data:/app/data
+    depends_on:
+      vers-api:
+        condition: service_healthy
+    environment:
+      - VERS_LOG_LEVEL=INFO
+    restart: unless-stopped
