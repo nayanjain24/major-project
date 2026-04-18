@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import threading
 import time
@@ -552,7 +553,9 @@ def main() -> None:
     if full_screen:
         st.subheader("Live Feed (Full Screen)")
         if snapshot.get("frame") is not None:
-            st.image(snapshot["frame"], channels="RGB", output_format="JPEG", use_column_width=True)
+            _, buffer = cv2.imencode(".jpg", cv2.cvtColor(snapshot["frame"], cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+            b64_img = base64.b64encode(buffer).decode("utf-8")
+            st.markdown(f'<img src="data:image/jpeg;base64,{b64_img}" style="width:100%; border-radius:12px; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">', unsafe_allow_html=True)
         else:
             st.info("Press 'Start Stream' to begin the live camera demo.")
     else:
@@ -560,7 +563,9 @@ def main() -> None:
         with feed_col:
             st.subheader("Live Feed")
             if snapshot.get("frame") is not None:
-                st.image(snapshot["frame"], channels="RGB", output_format="JPEG", use_column_width=True)
+                _, buffer = cv2.imencode(".jpg", cv2.cvtColor(snapshot["frame"], cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                b64_img = base64.b64encode(buffer).decode("utf-8")
+                st.markdown(f'<img src="data:image/jpeg;base64,{b64_img}" style="width:100%; border-radius:12px; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">', unsafe_allow_html=True)
             else:
                 st.info("Press 'Start Stream' to begin the live camera demo.")
 
