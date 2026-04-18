@@ -24,6 +24,15 @@ Conventional emergency response channels depend heavily on spoken communication.
 | **MEDICAL** | 🖐️ 4 Fingers (thumb folded) | High | Medical assistance needed |
 | **SAFE** | 👍 Thumbs Up | Low | Status: safe |
 
+## Sign Language Intelligence (v4.0)
+VERS now includes a robust LSTM-based sign language sequence recognition trained on 3,600 multi-source sequences, providing word-level interpretation for crisis communication. 
+
+* **ASL & ISL Mappings**: Supports both American Sign Language (ASL/WLASL) and Indian Sign Language (ISL) regional geometries.
+* **Emergency Vocabulary**: Recognizes 15 distinct emergency gestures including `HELP`, `ACCIDENT`, `MEDICAL`, `FIRE`, `POLICE`, `EMERGENCY`, `PAIN`, `FALL`, etc.
+* **Intent Engine**: Maps sequences (e.g. `["HELP", "ACCIDENT"]`) into compound critical alerts automatically.
+
+📖 **See the full [Sign Language Glossary](SIGN_LANGUAGE_GLOSSARY.md) for a detailed breakdown of all the symbols, what they mean, and their exact hand geometries.**
+
 ## Architecture Overview
 See `docs/workflow.png` for the Phase-1 system pipeline:
 - **Input**: Camera feed
