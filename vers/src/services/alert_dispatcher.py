@@ -214,10 +214,9 @@ def dispatch(
     logger.info("ALERT dispatched: %s [%s]", gesture_label, threat_level)
 
     # --- Multi-channel notification (v3.0) ---
-    if enable_tts and "tts" in _ACTIVE_CHANNELS and threat_level in ("CRITICAL", "HIGH"):
+    if enable_tts and "tts" in _ACTIVE_CHANNELS:
         voice_tts.speak(
-            f"Warning. {gesture_label} detected. Threat level {threat_level}. "
-            f"Emotion state: {dominant_emotion}."
+            f"{gesture_label} detected. Threat level {threat_level}."
         )
 
     if "sms" in _ACTIVE_CHANNELS and threat_level in ("CRITICAL", "HIGH"):
