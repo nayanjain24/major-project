@@ -52,6 +52,11 @@ from src.intelligence.multimodal_fusion import fuse, FusionResult
 from src.services.alert_dispatcher import dispatch as dispatch_alert
 from src.services import voice_tts
 
+# --- v4.0 Sign Language imports ---
+from src.vision.sequence_buffer import SequenceBuffer
+from src.vision.sign_language_model import SignLanguageRecognizer
+from src.intelligence.intent_mapper import IntentMapper
+
 
 def _trigger_rerun() -> None:
     if hasattr(st, "rerun"):
@@ -91,6 +96,7 @@ class DashboardRuntime:
         self._distress_threshold = DISTRESS_THRESHOLD
         self._model_bundle: dict[str, Any] | None = None
         self._labels: list[str] = []
+        self._sign_mode = False  # v4.0: sign language mode toggle
         # Start TTS daemon once
         voice_tts.start()
 
@@ -108,10 +114,11 @@ class DashboardRuntime:
                 raise RuntimeError("Model bundle is not available.")
             return self._model_bundle
 
-    def configure(self, conf_threshold: float, distress_threshold: float) -> None:
+    def configure(self, conf_threshold: float, distress_threshold: float, sign_mode: bool = False) -> None:
         with self._lock:
             self._conf_threshold = conf_threshold
             self._distress_threshold = distress_threshold
+            self._sign_mode = sign_mode
 
     def start(self, conf_threshold: float, distress_threshold: float) -> None:
         self.ensure_model_loaded()
@@ -228,6 +235,10 @@ class DashboardRuntime:
             "emotion_scores": {},
             "distress_contribution": 0.0,
         }
+        # v4.0: Sign language components
+        sign_buffer = SequenceBuffer(window_size=30)
+        sign_recognizer = SignLanguageRecognizer()
+        intent_mapper = IntentMapper(memory_size=5)
 
         with self._lock:
             self._status["running"] = True
@@ -261,8 +272,37 @@ class DashboardRuntime:
                 raw_label, raw_conf = "NONE", 0.0
                 if hand_vector is not None:
                     raw_label, raw_conf = predict_gesture(hand_vector)
+                    # v4.0: Feed sign language sequence buffer
+                    sign_buffer.push(hand_vector)
                 smoother.push(raw_label, raw_conf)
                 smooth_label, smooth_conf = smoother.smoothed()
+
+                # --- v4.0: SIGN LANGUAGE RECOGNITION ---
+                sign_word = "NONE"
+                sign_conf = 0.0
+                sign_intent_msg = ""
+                with self._lock:
+                    use_sign_mode = self._sign_mode
+                if use_sign_mode and sign_recognizer.available and sign_buffer.ready:
+                    sign_word, sign_conf = sign_recognizer.predict(sign_buffer.get_tensor())
+                    if sign_word != "NONE":
+                        intent = intent_mapper.push_word(sign_word)
+                        if intent is not None:
+                            sign_intent_msg = f"{intent.alert_type}: {intent.message}"
+                            # Dispatch sign-language-derived alert
+                            sl_payload = dispatch_alert(
+                                gesture_label=intent.alert_type,
+                                gesture_confidence=sign_conf,
+                                dominant_emotion=cached_emotion.get("dominant_emotion", "neutral"),
+                                emotion_distress=cached_emotion.get("distress_contribution", 0.0),
+                                severity_score=sign_conf,
+                                threat_level=intent.severity,
+                                distress_flag=distress_flag if 'distress_flag' in dir() else False,
+                                enable_tts=True,
+                            )
+                            if sl_payload is not None:
+                                with self._lock:
+                                    self._append_alert(sl_payload)
 
                 # --- FACE MESH + HEURISTIC DISTRESS (every frame) ---
                 face_results = face_mesh.process(rgb)
@@ -343,6 +383,9 @@ class DashboardRuntime:
                             "error": None,
                             "labels": list(self._labels),
                             "last_alert": payload or self._status.get("last_alert"),
+                            "sign_word": sign_word if use_sign_mode else "",
+                            "sign_buffer_words": intent_mapper.current_words if use_sign_mode else [],
+                            "sign_available": sign_recognizer.available,
                         }
                     )
 
@@ -580,6 +623,8 @@ def main() -> None:
         runtime.clear_data()
 
     full_screen = st.sidebar.checkbox("Full Screen Video Mode", value=False)
+    sign_mode = st.sidebar.checkbox("🤟 Sign Language Mode", value=False,
+                                     help="Enable LSTM-based sign language word recognition")
 
     if start_clicked:
         runtime.start(conf_threshold, distress_threshold)
@@ -590,7 +635,7 @@ def main() -> None:
         st.session_state.run_camera = False
 
     if st.session_state.run_camera:
-        runtime.configure(conf_threshold, distress_threshold)
+        runtime.configure(conf_threshold, distress_threshold, sign_mode=sign_mode)
 
     if model_error is not None:
         st.error(model_error)
@@ -661,6 +706,22 @@ def main() -> None:
             distress_delta = "⚠ High" if snapshot.get("distress_flag") else "✓ Normal"
             st.metric("Distress Score", f"{distress_value:.3f}", delta=distress_delta)
             st.metric("FPS", f"{float(snapshot.get('fps', 0.0)):.1f}")
+
+            # --- v4.0: Sign Language decoded text ---
+            if sign_mode:
+                st.markdown("---")
+                st.markdown("**🤟 Sign Language**")
+                sw = snapshot.get("sign_word", "")
+                buf_words = snapshot.get("sign_buffer_words", [])
+                if snapshot.get("sign_available"):
+                    if sw and sw != "NONE":
+                        st.markdown(f"<span style='color:#00e676; font-size:1.8rem; font-weight:700;'>{sw}</span>", unsafe_allow_html=True)
+                    else:
+                        st.markdown("<span style='color:#888;'>Listening...</span>", unsafe_allow_html=True)
+                    if buf_words:
+                        st.caption(f"Buffer: {' → '.join(buf_words)}")
+                else:
+                    st.info("Sign model not trained yet. Run: `python -m src.training.collect_sign_data` then `python -m src.training.train_sign_model`")
 
     # --- v2.0: Tabs for Alerts and JSON Inspector ---
     st.markdown("---")
