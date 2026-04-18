@@ -166,8 +166,8 @@ class DashboardRuntime:
             cap = cv2.VideoCapture(0)
             backend_info = "DEFAULT:0"
 
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 540)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
         if not cap.isOpened():
@@ -651,7 +651,7 @@ def main() -> None:
 
     if st.session_state.run_camera and not snapshot.get("error"):
         # Faster rerun for higher visual frame rate (avoid artificial lag)
-        time.sleep(0.01)
+        time.sleep(0.02)
         _trigger_rerun()
 
 
