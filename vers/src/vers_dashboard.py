@@ -406,9 +406,60 @@ def _analyze_browser_capture(
 
 def main() -> None:
     ensure_project_dirs()
-    st.set_page_config(page_title="VERS Dashboard", layout="wide")
-    st.title("Vision-Based Emergency Response System (VERS)")
-    st.caption("Primary Phase-1 demo dashboard for gesture recognition, distress scoring, and structured alerts.")
+    st.set_page_config(page_title="VERS Command Center", layout="wide", page_icon="🚨", initial_sidebar_state="expanded")
+    
+    st.markdown("""
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
+        
+        html, body, [class*="css"] {
+            font-family: 'Outfit', sans-serif !important;
+        }
+        
+        /* Glassmorphism Metric Cards */
+        [data-testid="stMetric"] {
+            background: rgba(30, 30, 42, 0.6);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            box-shadow: 0 4px 10px rgba(0,0,0,0.4);
+            padding: 1.2rem;
+            border-radius: 12px;
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+
+        [data-testid="stMetric"]:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.6);
+            border-color: rgba(255,255,255,0.25);
+        }
+
+        /* Ambient Sidebar Gradient */
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, #0e0e12 0%, #151520 100%);
+            border-right: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        header {
+            background: transparent !important;
+        }
+
+        /* Dynamic Buttons */
+        [data-testid="stButton"] button {
+            border-radius: 8px;
+            transition: all 0.3s ease;
+            font-weight: 600;
+        }
+
+        [data-testid="stButton"] button:hover {
+            transform: scale(1.03);
+            box-shadow: 0 4px 12px rgba(255, 255, 255, 0.15);
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.title("Vision-Based Emergency Response System")
+    st.caption("State-of-the-Art cyber-command center for continuous gesture tracking and rapid distress alerts.")
 
     runtime = get_runtime()
 
