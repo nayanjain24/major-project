@@ -501,8 +501,7 @@ def main() -> None:
     if full_screen:
         st.subheader("Live Feed (Full Screen)")
         if snapshot.get("frame") is not None:
-            disp_frame = cv2.resize(snapshot["frame"], (640, 360))
-            st.image(disp_frame, channels="RGB", use_column_width=True)
+            st.image(snapshot["frame"], channels="RGB", use_column_width=True)
         else:
             st.info("Press 'Start Stream' to begin the live camera demo.")
     else:
@@ -510,8 +509,7 @@ def main() -> None:
         with feed_col:
             st.subheader("Live Feed")
             if snapshot.get("frame") is not None:
-                disp_frame = cv2.resize(snapshot["frame"], (640, 360))
-                st.image(disp_frame, channels="RGB", use_column_width=True)
+                st.image(snapshot["frame"], channels="RGB", use_column_width=True)
             else:
                 st.info("Press 'Start Stream' to begin the live camera demo.")
 
@@ -601,8 +599,8 @@ def main() -> None:
                 st.info("No alert emitted from this capture (gesture confidence below threshold).")
 
     if st.session_state.run_camera and not snapshot.get("error"):
-        # Constrain UI refreshes strictly to 20 FPS to prevent WebSocket network flooding
-        time.sleep(0.05)
+        # Faster rerun for higher visual frame rate (avoid artificial lag)
+        time.sleep(0.01)
         _trigger_rerun()
 
 
