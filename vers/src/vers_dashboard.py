@@ -662,9 +662,9 @@ def main() -> None:
             st.metric("Distress Score", f"{distress_value:.3f}", delta=distress_delta)
             st.metric("FPS", f"{float(snapshot.get('fps', 0.0)):.1f}")
 
-    # --- v2.0: Tabs for Alerts, Map, and JSON Inspector ---
+    # --- v2.0: Tabs for Alerts and JSON Inspector ---
     st.markdown("---")
-    tab_alerts, tab_map, tab_json = st.tabs(["📋 Recent Alerts", "🗺️ Location Map", "🔍 JSON Inspector"])
+    tab_alerts, tab_json = st.tabs(["📋 Recent Alerts", "🔍 JSON Inspector"])
 
     with tab_alerts:
         alerts = snapshot.get("alerts", [])
@@ -683,15 +683,6 @@ def main() -> None:
             st.dataframe(pd.DataFrame(alert_rows), use_container_width=True)
         else:
             st.info("No alerts emitted yet.")
-
-    with tab_map:
-        loc = snapshot.get("location")
-        if loc and loc.get("latitude"):
-            map_df = pd.DataFrame([{"lat": loc["latitude"], "lon": loc["longitude"]}])
-            st.map(map_df, zoom=12)
-            st.caption(f"📍 Simulated location: **{loc.get('label', 'Unknown')}**")
-        else:
-            st.info("Location data will appear after the first alert is dispatched.")
 
     with tab_json:
         if snapshot.get("last_alert"):
