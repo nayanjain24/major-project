@@ -1,4 +1,10 @@
-"""Streamlit dashboard: the primary VERS demo surface for Phase-1."""
+"""Streamlit dashboard: VERS v2.0 Multimodal AI Command Center.
+
+Integrates:
+  - Vision: MediaPipe hand tracking + DeepFace facial emotion recognition
+  - Intelligence: Temporal sequence smoothing + Multimodal severity fusion
+  - Services: Async TTS voice alerts + Simulated GPS alert dispatch
+"""
 
 from __future__ import annotations
 
@@ -25,6 +31,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+# --- Legacy imports (still needed for model loading and overlay drawing) ---
 from src.realtime_vers import (
     ALERT_COOLDOWN_SECONDS,
     DISTRESS_THRESHOLD,
@@ -33,11 +40,17 @@ from src.realtime_vers import (
     calc_distress,
     draw_overlay,
     load_model,
-    predict_gesture,
-    smooth_prediction,
 )
 from src.utils.alert_utils import ALERT_MAP, log_error, make_alert_payload
 from src.utils.data_utils import ensure_project_dirs, extract_hand_vector, open_camera_capture
+
+# --- v2.0 Modular Architecture imports ---
+from src.vision.gesture_tracker import predict_gesture
+from src.vision.emotion_model import analyze_emotion
+from src.intelligence.temporal_smoothing import TemporalSmoother
+from src.intelligence.multimodal_fusion import fuse, FusionResult
+from src.services.alert_dispatcher import dispatch as dispatch_alert
+from src.services import voice_tts
 
 
 def _trigger_rerun() -> None:
@@ -48,7 +61,7 @@ def _trigger_rerun() -> None:
 
 
 class DashboardRuntime:
-    """Background webcam worker so Streamlit can offer responsive start/stop controls."""
+    """Background webcam worker with v2.0 multimodal AI pipeline."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
@@ -63,6 +76,11 @@ class DashboardRuntime:
             "confidence": 0.0,
             "distress_score": 0.0,
             "distress_flag": False,
+            "dominant_emotion": "neutral",
+            "emotion_distress": 0.0,
+            "severity_score": 0.0,
+            "threat_level": "NONE",
+            "location": None,
             "fps": 0.0,
             "error": None,
             "labels": [],
@@ -73,6 +91,8 @@ class DashboardRuntime:
         self._distress_threshold = DISTRESS_THRESHOLD
         self._model_bundle: dict[str, Any] | None = None
         self._labels: list[str] = []
+        # Start TTS daemon once
+        voice_tts.start()
 
     def ensure_model_loaded(self) -> list[str]:
         with self._lock:
@@ -161,6 +181,7 @@ class DashboardRuntime:
                 self._append_alert(payload)
 
     def _run_loop(self) -> None:
+        """Core v2.0 multimodal AI pipeline — runs in a background thread."""
         ensure_project_dirs()
         cap, backend_info = open_camera_capture(max_index=4, warmup_reads=18)
         if cap is None:
@@ -184,23 +205,29 @@ class DashboardRuntime:
 
         hands = mp.solutions.hands.Hands(
             max_num_hands=1,
-            model_complexity=0,  # Optimized for performance (0 is fastest)
+            model_complexity=0,
             min_detection_confidence=0.55,
             min_tracking_confidence=0.55,
         )
         face_mesh = mp.solutions.face_mesh.FaceMesh(
             max_num_faces=1,
-            refine_landmarks=False,  # Simplified mesh for higher FPS
+            refine_landmarks=False,
             min_detection_confidence=0.5,
             min_tracking_confidence=0.5,
         )
 
-        recent_preds: deque[tuple[str, float]] = deque(maxlen=SMOOTHING_WINDOW)
-        last_alert_signature = ""
-        last_alert_time = 0.0
+        # v2.0: Temporal smoother instead of raw deque
+        smoother = TemporalSmoother(window_size=7, min_votes=3)
         last_tick = time.perf_counter()
         consecutive_capture_failures = 0
         max_capture_failures = 45
+        frame_counter = 0
+        # Cached emotion result (updated every 3rd frame for FPS)
+        cached_emotion: dict[str, Any] = {
+            "dominant_emotion": "neutral",
+            "emotion_scores": {},
+            "distress_contribution": 0.0,
+        }
 
         with self._lock:
             self._status["running"] = True
@@ -222,19 +249,22 @@ class DashboardRuntime:
                     time.sleep(0.03)
                     continue
                 consecutive_capture_failures = 0
+                frame_counter += 1
 
                 frame = cv2.flip(frame, 1)
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 height, width, _ = frame.shape
 
+                # --- HAND GESTURE (every frame) ---
                 hand_results = hands.process(rgb)
                 hand_vector = extract_hand_vector(hand_results)
                 raw_label, raw_conf = "NONE", 0.0
-                if hand_vector is not None and self._model_bundle is not None:
-                    raw_label, raw_conf = predict_gesture(self._model_bundle, hand_vector)
-                recent_preds.append((raw_label, raw_conf))
-                smooth_label, smooth_conf = smooth_prediction(recent_preds)
+                if hand_vector is not None:
+                    raw_label, raw_conf = predict_gesture(hand_vector)
+                smoother.push(raw_label, raw_conf)
+                smooth_label, smooth_conf = smoother.smoothed()
 
+                # --- FACE MESH + HEURISTIC DISTRESS (every frame) ---
                 face_results = face_mesh.process(rgb)
                 face_lms = (
                     face_results.multi_face_landmarks[0]
@@ -243,25 +273,42 @@ class DashboardRuntime:
                 )
                 distress_score = calc_distress(face_lms, width, height)
 
+                # --- DEEPFACE EMOTION (every 3rd frame for performance) ---
+                if frame_counter % 3 == 0:
+                    try:
+                        cached_emotion = analyze_emotion(rgb)
+                    except Exception:
+                        pass  # Keep cached value
+
                 with self._lock:
                     distress_threshold = self._distress_threshold
-                    conf_threshold = self._conf_threshold
 
                 distress_flag = distress_score > distress_threshold
-                payload = None
-                now = time.time()
-                if smooth_label != "NONE" and smooth_conf >= conf_threshold:
-                    payload = make_alert_payload(smooth_label, smooth_conf, distress_score, distress_flag)
-                    signature = (
-                        f"{payload['MainGesture']}:{payload['Severity']}:"
-                        f"{payload['DistressFlag']}"
-                    )
-                    if signature != last_alert_signature or now - last_alert_time >= ALERT_COOLDOWN_SECONDS:
-                        with self._lock:
-                            self._append_alert(payload)
-                        last_alert_signature = signature
-                        last_alert_time = now
 
+                # --- MULTIMODAL FUSION ---
+                fusion: FusionResult = fuse(
+                    gesture_label=smooth_label,
+                    gesture_confidence=smooth_conf,
+                    dominant_emotion=cached_emotion.get("dominant_emotion", "neutral"),
+                    emotion_distress=cached_emotion.get("distress_contribution", 0.0),
+                )
+
+                # --- ALERT DISPATCH (with TTS + location) ---
+                payload = dispatch_alert(
+                    gesture_label=fusion.gesture_label,
+                    gesture_confidence=fusion.gesture_confidence,
+                    dominant_emotion=fusion.dominant_emotion,
+                    emotion_distress=fusion.emotion_distress,
+                    severity_score=fusion.severity_score,
+                    threat_level=fusion.threat_level,
+                    distress_flag=distress_flag,
+                    enable_tts=True,
+                )
+                if payload is not None:
+                    with self._lock:
+                        self._append_alert(payload)
+
+                # --- OVERLAY DRAWING ---
                 overlay = draw_overlay(
                     frame,
                     hand_results,
@@ -270,7 +317,6 @@ class DashboardRuntime:
                     smooth_conf,
                     distress_score,
                     distress_flag,
-                    conf_threshold=conf_threshold,
                 )
                 frame_rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
 
@@ -288,6 +334,11 @@ class DashboardRuntime:
                             "confidence": smooth_conf if smooth_label != "NONE" else 0.0,
                             "distress_score": distress_score,
                             "distress_flag": distress_flag,
+                            "dominant_emotion": fusion.dominant_emotion,
+                            "emotion_distress": fusion.emotion_distress,
+                            "severity_score": fusion.severity_score,
+                            "threat_level": fusion.threat_level,
+                            "location": payload.get("Location") if payload else self._status.get("location"),
                             "fps": fps,
                             "error": None,
                             "labels": list(self._labels),
@@ -295,8 +346,6 @@ class DashboardRuntime:
                         }
                     )
 
-                # Decreased sleep for 'buttery smooth' 30+ FPS capability
-                # We only sleep long enough to prevent 100% CPU pinning
                 time.sleep(0.005)
         except Exception as exc:
             exc_text = str(exc).strip() or type(exc).__name__
@@ -317,6 +366,10 @@ class DashboardRuntime:
                 self._status["confidence"] = 0.0
                 self._status["distress_score"] = 0.0
                 self._status["distress_flag"] = False
+                self._status["dominant_emotion"] = "neutral"
+                self._status["emotion_distress"] = 0.0
+                self._status["severity_score"] = 0.0
+                self._status["threat_level"] = "NONE"
                 self._status["fps"] = 0.0
                 self._frame = np.zeros((720, 1280, 3), dtype=np.uint8)
 
@@ -459,8 +512,8 @@ def main() -> None:
         </style>
     """, unsafe_allow_html=True)
 
-    st.title("Vision-Based Emergency Response System")
-    st.caption("State-of-the-Art cyber-command center for continuous gesture tracking and rapid distress alerts.")
+    st.title("VERS v2.0 — Multimodal AI Command Center")
+    st.caption("Real-time gesture + emotion fusion · Temporal smoothing · Voice alerts · Simulated GPS dispatch")
 
     runtime = get_runtime()
 
@@ -550,65 +603,101 @@ def main() -> None:
     if snapshot.get("error"):
         st.error(snapshot["error"])
 
-    if full_screen:
-        st.subheader("Live Feed (Full Screen)")
-        if snapshot.get("frame") is not None:
-            _, buffer = cv2.imencode(".jpg", cv2.cvtColor(snapshot["frame"], cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    # ---- Helper: render the video feed ----
+    def _render_feed(frame_data):
+        if frame_data is not None:
+            _, buffer = cv2.imencode(".jpg", cv2.cvtColor(frame_data, cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
             b64_img = base64.b64encode(buffer).decode("utf-8")
             st.markdown(f'<img src="data:image/jpeg;base64,{b64_img}" style="width:100%; border-radius:12px; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">', unsafe_allow_html=True)
         else:
             st.info("Press 'Start Stream' to begin the live camera demo.")
+
+    # ---- Helper: threat colour mapping ----
+    def _threat_color(level: str) -> str:
+        return {"CRITICAL": "#ff1744", "HIGH": "#ff5722", "MEDIUM": "#ff9800", "LOW": "#4caf50"}.get(level, "#90a4ae")
+
+    if full_screen:
+        st.subheader("Live Feed (Full Screen)")
+        _render_feed(snapshot.get("frame"))
     else:
         feed_col, side_col = st.columns([2.1, 1])
         with feed_col:
             st.subheader("Live Feed")
-            if snapshot.get("frame") is not None:
-                _, buffer = cv2.imencode(".jpg", cv2.cvtColor(snapshot["frame"], cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-                b64_img = base64.b64encode(buffer).decode("utf-8")
-                st.markdown(f'<img src="data:image/jpeg;base64,{b64_img}" style="width:100%; border-radius:12px; box-shadow: 0 4px 10px rgba(0,0,0,0.4);">', unsafe_allow_html=True)
-            else:
-                st.info("Press 'Start Stream' to begin the live camera demo.")
+            _render_feed(snapshot.get("frame"))
 
         with side_col:
             st.subheader("Current Readings")
 
             gesture_val = snapshot.get("gesture", "No gesture")
             g_color = _severity_color(gesture_val)
-
             st.markdown(
                 f"**Gesture:**<br><span style='color:{g_color}; font-size: 2.2rem; font-weight: 600;'>{gesture_val}</span>",
                 unsafe_allow_html=True,
             )
 
-            # st.metric("Confidence", f"{float(snapshot.get('confidence', 0.0)):.2f}")
+            # --- v2.0: Emotion + Severity + Threat Level ---
+            emotion_val = snapshot.get("dominant_emotion", "neutral").capitalize()
+            emotion_distress = float(snapshot.get("emotion_distress", 0.0))
+            severity_score = float(snapshot.get("severity_score", 0.0))
+            threat_level = snapshot.get("threat_level", "NONE")
+            t_color = _threat_color(threat_level)
+
+            st.markdown(
+                f"**Emotion:** <span style='font-size:1.3rem;'>{emotion_val}</span> &nbsp; "
+                f"<span style='color:#888; font-size:0.9rem;'>distress: {emotion_distress:.2f}</span>",
+                unsafe_allow_html=True,
+            )
+
+            st.markdown(
+                f"**Threat Level:** <span style='color:{t_color}; font-size:1.8rem; font-weight:700;'>{threat_level}</span>",
+                unsafe_allow_html=True,
+            )
+
+            # Severity progress bar
+            st.markdown(f"**Severity Score:** `{severity_score:.3f}`")
+            st.progress(min(severity_score, 1.0))
+
             distress_value = float(snapshot.get("distress_score", 0.0))
-            distress_delta = "High" if snapshot.get("distress_flag") else "Normal"
+            distress_delta = "⚠ High" if snapshot.get("distress_flag") else "✓ Normal"
             st.metric("Distress Score", f"{distress_value:.3f}", delta=distress_delta)
             st.metric("FPS", f"{float(snapshot.get('fps', 0.0)):.1f}")
 
-            st.markdown("---")
-            st.subheader("Recent Alerts")
-            alerts = snapshot.get("alerts", [])
-            if alerts:
-                alert_rows = [
-                    {
-                        "Timestamp": payload["Timestamp"],
-                        "Gesture": payload["MainGesture"],
-                        "Severity": payload["Severity"],
-                        "Confidence": payload["GestureConfidence"],
-                        "DistressScore": payload["DistressScore"],
-                        "DistressFlag": payload["DistressFlag"],
-                        "Message": payload["Message"],
-                    }
-                    for payload in alerts
-                ]
-                st.dataframe(pd.DataFrame(alert_rows), use_container_width=True)
-            else:
-                st.info("No alerts emitted yet.")
+    # --- v2.0: Tabs for Alerts, Map, and JSON Inspector ---
+    st.markdown("---")
+    tab_alerts, tab_map, tab_json = st.tabs(["📋 Recent Alerts", "🗺️ Location Map", "🔍 JSON Inspector"])
 
+    with tab_alerts:
+        alerts = snapshot.get("alerts", [])
+        if alerts:
+            alert_rows = [
+                {
+                    "Time": p.get("Timestamp", "")[:19],
+                    "Gesture": p.get("MainGesture", ""),
+                    "Emotion": p.get("DominantEmotion", "n/a"),
+                    "Threat": p.get("ThreatLevel", ""),
+                    "Severity": p.get("SeverityScore", 0.0),
+                    "Message": p.get("Message", ""),
+                }
+                for p in alerts
+            ]
+            st.dataframe(pd.DataFrame(alert_rows), use_container_width=True)
+        else:
+            st.info("No alerts emitted yet.")
+
+    with tab_map:
+        loc = snapshot.get("location")
+        if loc and loc.get("latitude"):
+            map_df = pd.DataFrame([{"lat": loc["latitude"], "lon": loc["longitude"]}])
+            st.map(map_df, zoom=12)
+            st.caption(f"📍 Simulated location: **{loc.get('label', 'Unknown')}**")
+        else:
+            st.info("Location data will appear after the first alert is dispatched.")
+
+    with tab_json:
         if snapshot.get("last_alert"):
-            st.markdown("**Latest Alert Payload**")
             st.json(snapshot["last_alert"])
+        else:
+            st.info("No JSON payload available yet. Start the stream and perform a gesture.")
 
     if snapshot.get("error"):
         st.markdown("---")
