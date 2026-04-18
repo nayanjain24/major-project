@@ -501,7 +501,8 @@ def main() -> None:
     if full_screen:
         st.subheader("Live Feed (Full Screen)")
         if snapshot.get("frame") is not None:
-            st.image(snapshot["frame"], channels="RGB", use_column_width=True)
+            _, buffer = cv2.imencode(".jpg", cv2.cvtColor(snapshot["frame"], cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+            st.image(buffer.tobytes(), use_column_width=True)
         else:
             st.info("Press 'Start Stream' to begin the live camera demo.")
     else:
@@ -509,7 +510,8 @@ def main() -> None:
         with feed_col:
             st.subheader("Live Feed")
             if snapshot.get("frame") is not None:
-                st.image(snapshot["frame"], channels="RGB", use_column_width=True)
+                _, buffer = cv2.imencode(".jpg", cv2.cvtColor(snapshot["frame"], cv2.COLOR_RGB2BGR), [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+                st.image(buffer.tobytes(), use_column_width=True)
             else:
                 st.info("Press 'Start Stream' to begin the live camera demo.")
 
